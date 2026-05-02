@@ -1,476 +1,550 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>SwiftNote</title>
-    
-    <link rel="icon" type="image/png" href="favicon.png">
-    <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="manifest" href="manifest.json">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = { darkMode: 'media' }
-    </script>
-    
-    <style>
-        :root { --app-height: 100vh; }
-        @supports (-webkit-touch-callout: none) {
-            :root { --app-height: -webkit-fill-available; }
-        }
-        body {
-            background-color: #ffffff;
-            margin: 0;
-            overflow: hidden;
-        }
-        @media (prefers-color-scheme: dark) {
-            body { background-color: #000000; }
-        }
-        
-        .editor-style {
-            font-size: 18px;
-            line-height: 1.6;
-            padding: 1.25rem;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            font-family: inherit;
-        }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>SwiftNote</title>
+  
+  <!-- PWA Requirements -->
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/png" href="./favicon.png">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
-        #editor {
-            color: transparent;
-            caret-color: #1c1c1e;
-            -ms-overflow-style: none;
-            scrollbar-width: none;
-        }
-        @media (prefers-color-scheme: dark) {
-            #editor { caret-color: #f2f2f7; }
-        }
-        #editor::-webkit-scrollbar { display: none; }
-        
-        .status-pulse {
-            animation: pulse-green 0.3s ease-in-out;
-        }
-        @keyframes pulse-green {
-            0% { color: inherit; }
-            50% { color: #34c759; }
-            100% { color: inherit; }
-        }
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Babel for in-browser JSX compilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-        /* CRITICAL iOS UI FIX: Extend the bottom bar through the safe area */
-        #bottomBar {
-            padding-bottom: env(safe-area-inset-bottom);
-            min-height: calc(44px + env(safe-area-inset-bottom));
-        }
-    </style>
+  <!-- Import Maps for React and Firebase -->
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js"
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      background-color: #f2f2f7;
+    }
+    @media (prefers-color-scheme: dark) {
+      body {
+        background-color: #000000;
+      }
+    }
+  </style>
 </head>
 <body>
+  <div id="root"></div>
 
-    <!-- Removed env(safe-area-inset-bottom) from main container to prevent white space -->
-    <div class="flex flex-col w-full bg-white dark:bg-black text-[#1c1c1e] dark:text-[#f2f2f7] font-sans overflow-hidden"
-         style="height: var(--app-height); padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);">
-        
-        <div class="relative flex-1 w-full overflow-hidden flex flex-col">
-            <div id="highlighter" class="absolute inset-0 editor-style pointer-events-none z-10 overflow-hidden" aria-hidden="true"></div>
-            <textarea id="editor" class="absolute inset-0 w-full h-full bg-transparent border-none outline-none resize-none editor-style z-20"
-                      style="-webkit-tap-highlight-color: transparent;" autofocus spellcheck="false"></textarea>
-        </div>
+  <!-- Service Worker Registration -->
+  <script>
+    // Only register the service worker if the environment supports it AND we are on a valid protocol (http/https).
+    // This prevents 'blob:' or 'data:' protocol errors in development/preview environments.
+    if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch((error) => {
+          console.warn('Service Worker registration failed:', error);
+        });
+      });
+    } else {
+      console.log('Service Worker registration skipped (unsupported protocol or environment).');
+    }
+  </script>
 
-        <div id="bottomBar" class="bg-[#f8f8f8] dark:bg-[#1c1c1e] border-t border-[#e5e5ea] dark:border-[#38383a] flex justify-between items-center px-5 select-none touch-pan-y">
-            <div class="flex items-center gap-2 text-[13px] font-medium text-gray-500 dark:text-gray-400 pointer-events-none mt-[-env(safe-area-inset-bottom)]">
-                <div id="statusDot" class="w-2 h-2 rounded-full transition-colors duration-300 bg-yellow-400"></div>
-                <span id="statusText">Local Cache</span>
-            </div>
-            <button id="clearBtn" class="text-[#007aff] text-[15px] font-semibold bg-transparent border-none p-0 cursor-pointer active:opacity-70 mt-[-env(safe-area-inset-bottom)]"
-                    style="-webkit-tap-highlight-color: transparent;">
-                Clear
-            </button>
-        </div>
+  <!-- Main Application Code -->
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { initializeApp } from 'firebase/app';
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+    import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-        <div id="clearModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div class="bg-white dark:bg-[#1c1c1e] w-[270px] rounded-[14px] flex flex-col overflow-hidden duration-200">
-                <div class="p-5 text-center flex flex-col gap-1 border-b border-gray-200 dark:border-gray-800">
-                    <h3 class="font-semibold text-[17px] m-0">Clear Note?</h3>
-                    <p class="text-[13px] m-0 text-gray-500 dark:text-gray-400">This action cannot be undone.</p>
-                </div>
-                <div class="flex">
-                    <button id="cancelBtn" class="flex-1 p-[11px] text-[17px] text-[#007aff] border-r border-gray-200 dark:border-gray-800 bg-transparent active:bg-gray-100 dark:active:bg-gray-800 transition-colors">
-                        Cancel
-                    </button>
-                    <button id="confirmClearBtn" class="flex-1 p-[11px] text-[17px] font-semibold text-[#ff3b30] bg-transparent active:bg-gray-100 dark:active:bg-gray-800 transition-colors">
-                        Clear
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
+    // --- Global Firebase Initialization ---
+    let firebaseConfig;
+    try {
+      firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+        apiKey: "AIzaSyDoeWb3w1vJs6hoexIetSiAqQU1wXhX1tM",
+        authDomain: "trainx-49d0e.firebaseapp.com",
+        projectId: "trainx-49d0e",
+        storageBucket: "trainx-49d0e.firebasestorage.app",
+        messagingSenderId: "905714923468",
+        appId: "1:905714923468:web:5218d3c8b379dae8238f69"
+      };
+    } catch (e) {
+      console.error("Config parse error", e);
+    }
 
-    <script>
-        if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js')
-                    .then(reg => console.log('Service Worker registered'))
-                    .catch(err => console.warn('Service Worker registration skipped:', err));
-            });
-        }
-    </script>
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.appId;
+    const localCacheKey = 'swiftnote_react_premium_cache';
 
-    <script type="module">
-        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, doc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    function App() {
+      const [text, setText] = useState('');
+      const [status, setStatus] = useState({ text: 'Local', type: 'local' });
+      const [user, setUser] = useState(null);
+      const [showClearSheet, setShowClearSheet] = useState(false);
+      const [toast, setToast] = useState(null);
+      
+      const editorRef = useRef(null);
+      const highlighterRef = useRef(null);
+      
+      const saveTimeoutRef = useRef(null);
+      const cursorRef = useRef(null);
+      const touchStartRef = useRef({ x: 0, y: 0 });
 
-        let firebaseConfig;
-        try {
-            firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-                apiKey: "AIzaSyDoeWb3w1vJs6hoexIetSiAqQU1wXhX1tM",
-                authDomain: "trainx-49d0e.firebaseapp.com",
-                projectId: "trainx-49d0e",
-                storageBucket: "trainx-49d0e.firebasestorage.app",
-                messagingSenderId: "905714923468",
-                appId: "1:905714923468:web:5218d3c8b379dae8238f69"
-            };
-        } catch (e) {
-            console.error("Config parse error", e);
-        }
+      // --- Anti-Glitch Trackers ---
+      const isTypingRef = useRef(false);
+      const typingTimeoutRef = useRef(null);
 
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.appId;
+      const markTyping = useCallback(() => {
+        isTypingRef.current = true;
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => {
+          isTypingRef.current = false;
+        }, 1000);
+      }, []);
 
-        const editor = document.getElementById('editor');
-        const highlighter = document.getElementById('highlighter');
-        const statusText = document.getElementById('statusText');
-        const statusDot = document.getElementById('statusDot');
-        const bottomBar = document.getElementById('bottomBar');
-        const clearBtn = document.getElementById('clearBtn');
-        const clearModal = document.getElementById('clearModal');
-        const cancelBtn = document.getElementById('cancelBtn');
-        const confirmClearBtn = document.getElementById('confirmClearBtn');
-
-        let currentUser = null;
-        let saveTimeout = null;
-        let isRemoteUpdate = false;
-        const localCacheKey = 'swiftnote_vanilla_cache';
-
-        const setStatus = (text, type) => {
-            statusText.innerText = text;
-            statusDot.className = 'w-2 h-2 rounded-full transition-colors duration-300';
-            if (type === 'saved') statusDot.classList.add('bg-green-500');
-            else if (type === 'saving') statusDot.classList.add('bg-blue-500');
-            else if (type === 'error') statusDot.classList.add('bg-red-500');
-            else statusDot.classList.add('bg-yellow-400');
-        };
-
-        const renderHighlighter = () => {
-            let val = editor.value;
-            if (!val) {
-                highlighter.innerHTML = '<span class="text-gray-400 dark:text-gray-600">Start typing...\n• lists\n☐ tasks\n-- time\n1 + 1 = math</span>';
-                return;
-            }
-            val = val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const lines = val.split('\n');
-            const formattedLines = lines.map(line => {
-                if (line.match(/^(\s*)☑/)) {
-                    return `<span class="text-gray-400 dark:text-gray-500 line-through">${line}</span>`;
-                }
-                return `<span class="text-[#1c1c1e] dark:text-[#f2f2f7]">${line}</span>`;
-            });
-            let html = formattedLines.join('\n');
-            if (val.endsWith('\n')) html += '<br>';
-            highlighter.innerHTML = html;
-        };
-
-        editor.addEventListener('scroll', () => { highlighter.scrollTop = editor.scrollTop; });
-
+      // --- 1. Boot & Auth ---
+      useEffect(() => {
         const cached = localStorage.getItem(localCacheKey);
-        if (cached) {
-            editor.value = cached;
-            renderHighlighter();
-        }
+        if (cached) setText(cached);
 
         setTimeout(() => {
-            editor.focus();
-            editor.setSelectionRange(editor.value.length, editor.value.length);
-        }, 100);
+          if (editorRef.current) {
+            editorRef.current.focus();
+            const length = editorRef.current.value.length;
+            editorRef.current.setSelectionRange(length, length);
+          }
+        }, 150);
 
         const initAuth = async () => {
-            try {
-                setStatus('Connecting...', 'saving');
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                setStatus('Offline Mode', 'local');
+          try {
+            setStatus({ text: 'Connecting...', type: 'saving' });
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+              await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+              await signInAnonymously(auth);
             }
+          } catch (error) {
+            setStatus({ text: 'Offline', type: 'error' });
+          }
         };
 
         initAuth();
 
-        onAuthStateChanged(auth, (user) => {
-            currentUser = user;
-            if (user) setupCloudSync(user);
-            else setStatus('Auth Error', 'error');
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+          setUser(currentUser);
+          if (!currentUser) setStatus({ text: 'Auth Error', type: 'error' });
         });
 
-        let unsubscribeSnapshot = null;
-        const setupCloudSync = (user) => {
-            // CRITICAL SYNC FIX: Using the 'public' database path instead of the user's private path.
-            // This allows your Macbook (Logged In) and iPhone PWA (Anonymous) to see the exact same document.
-            const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'cross-device-sync');
+        return () => unsubscribe();
+      }, []);
 
-            const cachedText = localStorage.getItem(localCacheKey);
-            if (cachedText) {
-                setDoc(noteDocRef, { content: cachedText, updatedAt: Date.now() }, { merge: true })
-                    .then(() => setStatus('Synced', 'saved'))
-                    .catch(() => setStatus('Sync Error', 'error'));
-            } else {
-                setStatus('Synced', 'saved');
-            }
-
-            if (unsubscribeSnapshot) unsubscribeSnapshot();
-            unsubscribeSnapshot = onSnapshot(noteDocRef, { includeMetadataChanges: true }, (docSnap) => {
-                if (docSnap.exists()) {
-                    if (docSnap.metadata.hasPendingWrites) return;
-
-                    const cloudData = docSnap.data();
-                    if (editor.value !== cloudData.content) {
-                        const cursorStart = editor.selectionStart;
-                        
-                        isRemoteUpdate = true;
-                        editor.value = cloudData.content || '';
-                        renderHighlighter();
-                        localStorage.setItem(localCacheKey, editor.value);
-                        
-                        if (document.activeElement === editor) {
-                            const newCursor = Math.min(cursorStart, editor.value.length);
-                            editor.setSelectionRange(newCursor, newCursor);
-                        }
-                        
-                        setTimeout(() => { isRemoteUpdate = false; }, 50);
-                    }
-                }
-            });
+      // --- 2. Emergency LocalStorage Flush ---
+      useEffect(() => {
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'hidden' && editorRef.current) {
+            localStorage.setItem(localCacheKey, editorRef.current.value);
+          }
         };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }, []);
 
-        editor.addEventListener('input', () => {
-            if (isRemoteUpdate) return;
+      // --- 3. Real-time Cross-Device Sync ---
+      useEffect(() => {
+        if (!user) return;
 
-            let val = editor.value;
-            const cursor = editor.selectionStart;
-            let textBefore = val.substring(0, cursor);
-            const textAfter = val.substring(cursor);
-            let modified = false;
+        const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'premium-shared-pad');
 
-            if (textBefore.endsWith('-- ')) {
-                const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) + ' ';
-                textBefore = textBefore.slice(0, -3) + timeStr;
-                modified = true;
+        const unsubscribe = onSnapshot(noteDocRef, { includeMetadataChanges: true }, (docSnap) => {
+          if (docSnap.exists()) {
+            if (docSnap.metadata.hasPendingWrites) return; 
+
+            if (isTypingRef.current) return;
+
+            const cloudData = docSnap.data();
+            if (editorRef.current && editorRef.current.value !== cloudData.content) {
+              const currentCursor = editorRef.current.selectionStart;
+              
+              setText(cloudData.content || '');
+              localStorage.setItem(localCacheKey, cloudData.content || '');
+              
+              if (document.activeElement === editorRef.current) {
+                 cursorRef.current = Math.min(currentCursor, (cloudData.content || '').length);
+              }
             }
+          }
+        }, (error) => {
+            console.error(error);
+        });
 
-            if (textBefore.match(/(^|\n)-\s$/)) {
-                textBefore = textBefore.slice(0, -2) + '• ';
-                modified = true;
-            }
+        return () => unsubscribe();
+      }, [user]);
 
-            if (textBefore.match(/(^|\n)\[\s\]\s$/)) {
-                textBefore = textBefore.slice(0, -4) + '☐ ';
-                modified = true;
-            }
-            if (textBefore.match(/(^|\n)\[[xX]\]\s$/)) {
-                textBefore = textBefore.slice(0, -4) + '☑ ';
-                modified = true;
-            }
+      // --- 4. Synchronous DOM Cursor Restoration ---
+      useLayoutEffect(() => {
+        if (cursorRef.current !== null && editorRef.current) {
+          editorRef.current.setSelectionRange(cursorRef.current, cursorRef.current);
+          cursorRef.current = null;
+        }
+      }, [text]);
 
-            const mathMatch = textBefore.match(/([0-9\s\+\-\*\/\(\)\.\^\%]+)=\s*$/);
+      const triggerSave = useCallback((val) => {
+        setStatus({ text: 'Saving...', type: 'saving' });
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+        
+        saveTimeoutRef.current = setTimeout(async () => {
+          localStorage.setItem(localCacheKey, val);
+
+          if (user) {
+            try {
+              const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'premium-shared-pad');
+              await setDoc(noteDocRef, { content: val, updatedAt: Date.now() }, { merge: true });
+              setStatus({ text: 'Saved', type: 'saved' });
+            } catch (error) {
+              setStatus({ text: 'Save Error', type: 'error' });
+            }
+          } else {
+            setStatus({ text: 'Local', type: 'local' });
+          }
+        }, 400); 
+      }, [user]);
+
+      // --- 5. High-Performance Input Handler ---
+      const handleInput = useCallback((e) => {
+        markTyping(); 
+
+        let val = e.target.value;
+        let cursor = e.target.selectionStart;
+        let modified = false;
+
+        const insertedChar = e.nativeEvent?.data;
+        if (e.nativeEvent?.inputType === 'insertText' && (insertedChar === ' ' || insertedChar === '=')) {
+          let textBefore = val.substring(0, cursor);
+          const textAfter = val.substring(cursor);
+
+          if (textBefore.endsWith('-- ')) {
+            const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) + ' ';
+            textBefore = textBefore.slice(0, -3) + timeStr;
+            modified = true;
+          }
+          else if (textBefore.match(/(^|\n)-\s$/)) {
+            textBefore = textBefore.slice(0, -2) + '• ';
+            modified = true;
+          }
+          else if (textBefore.match(/(^|\n)\[\s\]\s$/)) {
+            textBefore = textBefore.slice(0, -4) + '☐ ';
+            modified = true;
+          }
+          else if (textBefore.match(/(^|\n)\[[xX]\]\s$/)) {
+            textBefore = textBefore.slice(0, -4) + '☑ ';
+            modified = true;
+          }
+          else if (insertedChar === '=') {
+            const currentLine = textBefore.split('\n').pop();
+            const mathMatch = currentLine.match(/([0-9 \t\+\-\*\/\(\)\.\^\%]+)=\s*$/);
             if (mathMatch) {
-                let expr = mathMatch[1].trim();
-                if (/[\+\-\*\/\^\%]/.test(expr) && /^[0-9\s\+\-\*\/\(\)\.\^\%]+$/.test(expr)) {
-                    try {
-                        let jsExpr = expr.replace(/\^/g, '**');
-                        let result = new Function('"use strict"; return (' + jsExpr + ')')();
-                        
-                        if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
-                            result = Math.round(result * 10000) / 10000;
-                            textBefore += result;
-                            modified = true;
-                        }
-                    } catch (e) {}
-                }
-            }
-
-            if (modified) {
-                editor.value = textBefore + textAfter;
-                editor.setSelectionRange(textBefore.length, textBefore.length);
-                val = editor.value;
-            }
-
-            renderHighlighter();
-            localStorage.setItem(localCacheKey, val);
-
-            if (currentUser) {
-                setStatus('Saving...', 'saving');
-                if (saveTimeout) clearTimeout(saveTimeout);
-                
-                saveTimeout = setTimeout(async () => {
-                    try {
-                        // Saving to the shared public path so all your devices sync together
-                        const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'cross-device-sync');
-                        await setDoc(noteDocRef, { content: val, updatedAt: Date.now() }, { merge: true });
-                        setStatus('Saved to Cloud', 'saved');
-                    } catch (error) {
-                        setStatus('Save Failed', 'error');
-                    }
-                }, 400);
-            }
-        });
-
-        editor.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                const cursorPosition = editor.selectionStart;
-                const textBeforeCursor = editor.value.substring(0, cursorPosition);
-                const lines = textBeforeCursor.split('\n');
-                const currentLine = lines[lines.length - 1];
-
-                const bulletMatch = currentLine.match(/^(\s*)•\s+(.*)$/);
-                const numMatch = currentLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
-                const checkMatch = currentLine.match(/^(\s*)([☐☑])\s+(.*)$/);
-
-                if (bulletMatch || numMatch || checkMatch) {
-                    e.preventDefault();
-                    let insertion = '';
-                    
-                    const isEmpty = (bulletMatch && bulletMatch[2].trim().length === 0) || 
-                                    (numMatch && numMatch[3].trim().length === 0) ||
-                                    (checkMatch && checkMatch[3].trim().length === 0);
-
-                    if (isEmpty) {
-                        const lineStartPos = cursorPosition - currentLine.length;
-                        const textBeforeLine = editor.value.substring(0, lineStartPos);
-                        const textAfterCursor = editor.value.substring(cursorPosition);
-                        
-                        editor.value = textBeforeLine + '\n' + textAfterCursor;
-                        editor.setSelectionRange(lineStartPos + 1, lineStartPos + 1);
-                        editor.dispatchEvent(new Event('input'));
-                        return;
-                    }
-
-                    if (checkMatch) insertion = `\n${checkMatch[1]}☐ `; 
-                    else if (bulletMatch) insertion = `\n${bulletMatch[1]}• `;
-                    else if (numMatch) {
-                        const nextNum = parseInt(numMatch[2], 10) + 1;
-                        insertion = `\n${numMatch[1]}${nextNum}. `;
-                    }
-
-                    const textAfterCursor = editor.value.substring(cursorPosition);
-                    editor.value = textBeforeCursor + insertion + textAfterCursor;
-
-                    const newPos = cursorPosition + insertion.length;
-                    editor.setSelectionRange(newPos, newPos);
-                    editor.dispatchEvent(new Event('input'));
-                }
-            }
-        });
-
-        editor.addEventListener('click', (e) => {
-            const cursor = editor.selectionStart;
-            if (cursor !== editor.selectionEnd) return; 
-
-            const text = editor.value;
-            const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
-            let lineEnd = text.indexOf('\n', cursor);
-            if (lineEnd === -1) lineEnd = text.length;
-            
-            const line = text.substring(lineStart, lineEnd);
-            const checkMatch = line.match(/^(\s*)([☐☑])/);
-            
-            if (checkMatch) {
-                const relativeCursor = cursor - lineStart;
-                if (relativeCursor <= checkMatch[0].length + 1) {
-                    const isChecked = checkMatch[2] === '☑';
-                    const newChar = isChecked ? '☐' : '☑';
-                    const newLine = line.replace(/^(\s*)[☐☑]/, `$1${newChar}`);
-                    
-                    editor.value = text.substring(0, lineStart) + newLine + text.substring(lineEnd);
-                    editor.setSelectionRange(cursor, cursor); 
-                    editor.dispatchEvent(new Event('input')); 
-                }
-            }
-        });
-
-        let touchStartX = 0;
-        let touchStartY = 0;
-
-        bottomBar.addEventListener('touchstart', (e) => {
-            touchStartX = e.changedTouches[0].screenX;
-            touchStartY = e.changedTouches[0].screenY;
-        }, { passive: true });
-
-        bottomBar.addEventListener('touchend', (e) => {
-            const touchEndX = e.changedTouches[0].screenX;
-            const touchEndY = e.changedTouches[0].screenY;
-            
-            const deltaX = touchEndX - touchStartX;
-            const deltaY = Math.abs(touchEndY - touchStartY);
-
-            if (deltaX > 70 && deltaY < 40) {
-                const tempTextArea = document.createElement('textarea');
-                tempTextArea.value = editor.value;
-                document.body.appendChild(tempTextArea);
-                tempTextArea.select();
-                
+              let expr = mathMatch[1].trim();
+              if (/[\+\-\*\/\^\%\(\)]/.test(expr) && /^[0-9 \t\+\-\*\/\(\)\.\^\%]+$/.test(expr)) {
                 try {
-                    document.execCommand('copy');
-                    const originalText = statusText.innerText;
-                    statusText.classList.add('status-pulse');
-                    setStatus('Copied to Clipboard!', 'saved');
-                    
-                    setTimeout(() => {
-                        statusText.classList.remove('status-pulse');
-                        if (currentUser) setStatus('Saved to Cloud', 'saved');
-                        else setStatus('Local Cache', 'local');
-                    }, 2000);
+                  let jsExpr = expr.replace(/\^/g, '**')
+                                   .replace(/(\d)\s*\(/g, '$1*(')
+                                   .replace(/\)\s*(\d)/g, ')*$1')
+                                   .replace(/\)\s*\(/g, ')*(');
+                  let result = new Function('"use strict"; return (' + jsExpr + ')')();
+                  if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
+                    result = Math.round(result * 10000) / 10000;
+                    textBefore += result;
+                    modified = true;
+                  }
                 } catch (err) {}
-                
-                document.body.removeChild(tempTextArea);
+              }
             }
-        }, { passive: true });
+          }
 
-        clearBtn.addEventListener('click', () => { clearModal.classList.remove('hidden'); });
+          if (modified) {
+            val = textBefore + textAfter;
+            cursorRef.current = textBefore.length;
+          }
+        }
 
-        cancelBtn.addEventListener('click', () => {
-            clearModal.classList.add('hidden');
-            setTimeout(() => editor.focus(), 100);
+        setText(val);
+        triggerSave(val);
+      }, [markTyping, triggerSave]);
+
+      // --- 6. Auto-Continuation (Enter Key) ---
+      const handleKeyDown = useCallback((e) => {
+        if (e.key === 'Enter') {
+          markTyping();
+          const cursorPosition = e.target.selectionStart;
+          const textBeforeCursor = text.substring(0, cursorPosition);
+          const lines = textBeforeCursor.split('\n');
+          const currentLine = lines[lines.length - 1];
+
+          const bulletMatch = currentLine.match(/^(\s*)•\s+(.*)$/);
+          const numMatch = currentLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
+          const checkMatch = currentLine.match(/^(\s*)([☐☑])\s+(.*)$/);
+
+          if (bulletMatch || numMatch || checkMatch) {
+            e.preventDefault();
+            let insertion = '';
+            const isEmpty = (bulletMatch && bulletMatch[2].trim().length === 0) || 
+                            (numMatch && numMatch[3].trim().length === 0) ||
+                            (checkMatch && checkMatch[3].trim().length === 0);
+
+            if (isEmpty) {
+              const lineStartPos = cursorPosition - currentLine.length;
+              const newVal = text.substring(0, lineStartPos) + '\n' + text.substring(cursorPosition);
+              setText(newVal);
+              cursorRef.current = lineStartPos + 1;
+              triggerSave(newVal);
+              return;
+            }
+
+            if (checkMatch) insertion = `\n${checkMatch[1]}☐ `; 
+            else if (bulletMatch) insertion = `\n${bulletMatch[1]}• `;
+            else if (numMatch) insertion = `\n${numMatch[1]}${parseInt(numMatch[2], 10) + 1}. `;
+
+            const newVal = textBeforeCursor + insertion + text.substring(cursorPosition);
+            setText(newVal);
+            cursorRef.current = cursorPosition + insertion.length;
+            triggerSave(newVal);
+          }
+        }
+      }, [text, markTyping, triggerSave]);
+
+      // --- 7. Interactive Checklist Toggle ---
+      const handleClick = useCallback((e) => {
+        const cursor = e.target.selectionStart;
+        if (cursor !== e.target.selectionEnd) return; 
+
+        const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+        let lineEnd = text.indexOf('\n', cursor);
+        if (lineEnd === -1) lineEnd = text.length;
+        
+        const line = text.substring(lineStart, lineEnd);
+        const checkMatch = line.match(/^(\s*)([☐☑])/);
+        
+        if (checkMatch && (cursor - lineStart) <= checkMatch[0].length + 1) {
+          markTyping();
+          const isChecked = checkMatch[2] === '☑';
+          const newLine = line.replace(/^(\s*)[☐☑]/, `$1${isChecked ? '☐' : '☑'}`);
+          const newVal = text.substring(0, lineStart) + newLine + text.substring(lineEnd);
+          setText(newVal);
+          cursorRef.current = cursor;
+          triggerSave(newVal);
+        }
+      }, [text, markTyping, triggerSave]);
+
+      // --- 8. Swipe-to-Copy Gestures ---
+      const handleTouchStart = (e) => {
+        touchStartRef.current = { x: e.changedTouches[0].screenX, y: e.changedTouches[0].screenY };
+      };
+
+      const handleTouchEnd = (e) => {
+        const deltaX = e.changedTouches[0].screenX - touchStartRef.current.x;
+        const deltaY = Math.abs(e.changedTouches[0].screenY - touchStartRef.current.y);
+
+        if (deltaX > 80 && deltaY < 40) {
+          const tempTextArea = document.createElement('textarea');
+          tempTextArea.value = text;
+          tempTextArea.style.position = 'fixed';
+          tempTextArea.style.opacity = '0';
+          document.body.appendChild(tempTextArea);
+          tempTextArea.select();
+          try {
+            document.execCommand('copy');
+            showToast('Copied to clipboard');
+          } catch (err) {}
+          document.body.removeChild(tempTextArea);
+        }
+      };
+
+      const showToast = (message) => {
+        setToast(message);
+        setTimeout(() => setToast(null), 2500);
+      };
+
+      const executeClear = async () => {
+        setText('');
+        localStorage.removeItem(localCacheKey);
+        setShowClearSheet(false);
+        if (user) {
+          const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'premium-shared-pad');
+          await setDoc(noteDocRef, { content: '', updatedAt: Date.now() }, { merge: true });
+        }
+        setTimeout(() => editorRef.current?.focus(), 100);
+        showToast('Note cleared');
+      };
+
+      // --- UI Helpers & Memoized Render ---
+      const getStatusColor = () => {
+        switch(status.type) {
+          case 'saved': return 'bg-[#34c759] shadow-[0_0_8px_rgba(52,199,89,0.4)]'; 
+          case 'saving': return 'bg-[#007aff] shadow-[0_0_8px_rgba(0,122,255,0.4)]'; 
+          case 'error': return 'bg-[#ff3b30] shadow-[0_0_8px_rgba(255,59,48,0.4)]'; 
+          default: return 'bg-[#ffcc00] shadow-[0_0_8px_rgba(255,204,0,0.4)]'; 
+        }
+      };
+
+      const richTextElements = useMemo(() => {
+        if (!text) {
+          return (
+            <span 
+              className="text-[#8e8e93] dark:text-[#636366]" 
+              dangerouslySetInnerHTML={{ __html: 'Start typing...\n• lists\n☐ tasks\n-- time\n2(3) = math\n*bold* and _italic_' }} 
+            />
+          );
+        }
+        
+        const escapeHtml = (str) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        
+        return text.split('\n').map((line, i, arr) => {
+          const isChecked = /^\s*☑/.test(line);
+          let className = "text-[#1c1c1e] dark:text-[#f2f2f7]";
+          if (isChecked) className = "text-[#8e8e93] dark:text-[#636366] line-through transition-all duration-200";
+          
+          let htmlLine = escapeHtml(line);
+          
+          htmlLine = htmlLine.replace(/(^|\s|[(\[{])\*([^\s*](?:[^*]*[^\s*])?)\*(?=\s|$|[.,:;!?)}\]])/g, '$1<strong class="font-bold">$2</strong>');
+          htmlLine = htmlLine.replace(/(^|\s|[(\[{])_([^\s_](?:[^_]*[^\s_])?)_(?=\s|$|[.,:;!?)}\]])/g, '$1<em class="italic">$2</em>');
+          
+          return (
+            <span 
+              key={i} 
+              className={className}
+              dangerouslySetInnerHTML={{ __html: htmlLine + (i < arr.length - 1 ? '\n' : '') }}
+            />
+          );
         });
+      }, [text]);
 
-        confirmClearBtn.addEventListener('click', async () => {
-            editor.value = '';
-            renderHighlighter();
-            localStorage.removeItem(localCacheKey);
-            clearModal.classList.add('hidden');
+      return (
+        <div className="fixed inset-0 flex flex-col w-full bg-[#f2f2f7] dark:bg-[#000000] font-sans overflow-hidden">
+          
+          <style dangerouslySetInnerHTML={{__html: `
+            :root { caret-color: #007aff; }
+            .no-scrollbar::-webkit-scrollbar { display: none; }
+            .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+            ::selection { background: rgba(0, 122, 255, 0.2); }
+          `}} />
+          
+          <div className={`fixed top-safe left-1/2 -translate-x-1/2 mt-4 z-50 transition-all duration-300 pointer-events-none
+                          ${toast ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-4 scale-95'}`}>
+            <div className="bg-[#1c1c1e]/90 dark:bg-white/90 backdrop-blur-md text-white dark:text-black px-4 py-2 rounded-full text-sm font-medium shadow-lg flex items-center gap-2">
+              <svg className="w-4 h-4 text-[#34c759]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+              {toast}
+            </div>
+          </div>
+
+          <div 
+            className="relative flex-1 w-full flex flex-col bg-white dark:bg-[#1c1c1e] rounded-b-[2rem] shadow-sm overflow-hidden z-10 transition-colors duration-300"
+            style={{ paddingTop: 'env(safe-area-inset-top)', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }}
+          >
+            <div ref={highlighterRef} className="absolute inset-0 z-10 pointer-events-none text-[16px] leading-[1.6] p-6 pt-8 whitespace-pre-wrap break-words pb-32">
+              {richTextElements}
+            </div>
             
-            if (currentUser) {
-                try {
-                    const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'cross-device-sync');
-                    await setDoc(noteDocRef, { content: '', updatedAt: Date.now() }, { merge: true });
-                    setStatus('Cleared', 'saved');
-                } catch (e) {
-                    setStatus('Clear Failed', 'error');
-                }
-            } else {
-                setStatus('Local Cache Cleared', 'local');
-            }
-            setTimeout(() => editor.focus(), 100);
-        });
+            <textarea 
+              ref={editorRef} 
+              value={text} 
+              onChange={handleInput} 
+              onKeyDown={handleKeyDown} 
+              onClick={handleClick} 
+              onScroll={(e) => highlighterRef.current && (highlighterRef.current.scrollTop = e.target.scrollTop)}
+              className="absolute inset-0 w-full h-full bg-transparent border-none outline-none resize-none z-20 text-[16px] leading-[1.6] p-6 pt-8 whitespace-pre-wrap break-words no-scrollbar text-transparent pb-32"
+              style={{ WebkitTapHighlightColor: 'transparent', caretColor: 'var(--caret-color)' }} 
+              spellCheck={false} 
+              autoFocus
+            />
+          </div>
 
-        document.addEventListener("visibilitychange", () => {
-            if (document.visibilityState === 'visible') editor.focus();
-        });
-    </script>
+          <div 
+            onTouchStart={handleTouchStart} 
+            onTouchEnd={handleTouchEnd} 
+            className="fixed bottom-0 left-0 right-0 z-30 backdrop-blur-xl bg-white/80 dark:bg-[#1c1c1e]/80 border-t border-[#e5e5ea] dark:border-[#38383a]"
+            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          >
+            <div className="flex justify-between items-center px-6 h-[54px] select-none">
+              
+              <div className="flex items-center gap-2.5 text-[13px] font-medium text-[#8e8e93] dark:text-[#636366]">
+                <div className="relative flex items-center justify-center">
+                  {status.type === 'saving' && <div className="absolute w-4 h-4 rounded-full border-2 border-[#007aff] border-t-transparent animate-spin" />}
+                  <div className={`w-2 h-2 rounded-full transition-all duration-300 ${getStatusColor()}`} />
+                </div>
+                <span className="tracking-wide uppercase text-[11px] font-bold">{status.text}</span>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <span className="text-[11px] font-medium text-[#c7c7cc] dark:text-[#48484a] hidden sm:block">Swipe bar to copy →</span>
+                <button 
+                  onClick={() => setShowClearSheet(true)} 
+                  className="text-[#007aff] text-[16px] font-semibold tracking-tight active:opacity-50 transition-opacity flex items-center gap-1.5"
+                  style={{ WebkitTapHighlightColor: 'transparent' }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {showClearSheet && (
+            <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-4 bg-black/40 backdrop-blur-[2px] transition-opacity duration-200 animate-in fade-in">
+              <div className="w-full max-w-sm flex flex-col gap-2 pb-safe animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200">
+                
+                <div className="bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-xl rounded-[14px] overflow-hidden flex flex-col text-center">
+                  <div className="p-4 border-b border-[#3c3c43]/20 dark:border-[#545458]/40">
+                    <p className="text-[13px] font-medium text-[#8e8e93] dark:text-[#ebebf5]/60 m-0 leading-snug">
+                      Are you sure you want to clear this note?<br/>This action cannot be undone.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={executeClear} 
+                    className="p-4 text-[20px] font-normal text-[#ff3b30] bg-transparent active:bg-[#e5e5ea] dark:active:bg-[#3a3a3c] transition-colors"
+                    style={{ WebkitTapHighlightColor: 'transparent' }}
+                  >
+                    Clear Note
+                  </button>
+                </div>
+
+                <button 
+                  onClick={() => { setShowClearSheet(false); setTimeout(() => editorRef.current?.focus(), 100); }} 
+                  className="bg-white dark:bg-[#2c2c2e] p-4 rounded-[14px] text-[20px] font-semibold text-[#007aff] active:bg-[#e5e5ea] dark:active:bg-[#3a3a3c] transition-colors"
+                  style={{ WebkitTapHighlightColor: 'transparent' }}
+                >
+                  Cancel
+                </button>
+
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Mount the React Application
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
 </body>
 </html>
