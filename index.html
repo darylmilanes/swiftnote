@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>SwiftNote</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'media' }
+    </script>
+    
+    <style>
+        :root { --app-height: 100vh; }
+        @supports (-webkit-touch-callout: none) {
+            :root { --app-height: -webkit-fill-available; }
+        }
+        body {
+            background-color: #ffffff;
+            margin: 0;
+            overflow: hidden;
+        }
+        @media (prefers-color-scheme: dark) {
+            body { background-color: #000000; }
+        }
+        #editor {
+            font-size: 18px;
+            line-height: 1.6;
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        #editor::-webkit-scrollbar { display: none; }
+        
+        /* Subtle animation for status bar text */
+        .status-pulse {
+            animation: pulse-green 0.3s ease-in-out;
+        }
+        @keyframes pulse-green {
+            0% { color: inherit; }
+            50% { color: #34c759; }
+            100% { color: inherit; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="flex flex-col w-full bg-white dark:bg-black text-[#1c1c1e] dark:text-[#f2f2f7] font-sans overflow-hidden"
+         style="height: var(--app-height); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);">
+        
+        <textarea id="editor" placeholder="Start typing...&#10;- lists&#10;[ ] tasks&#10;-- time" 
+                  class="flex-1 w-full bg-transparent border-none outline-none resize-none p-5 placeholder-gray-400 dark:placeholder-gray-600 font-normal"
+                  style="-webkit-tap-highlight-color: transparent;" autofocus></textarea>
+
+        <div id="bottomBar" class="h-[44px] min-h-[44px] bg-[#f8f8f8] dark:bg-[#1c1c1e] border-t border-[#e5e5ea] dark:border-[#38383a] flex justify-between items-center px-5 select-none touch-pan-y">
+            <div class="flex items-center gap-2 text-[13px] font-medium text-gray-500 dark:text-gray-400 pointer-events-none">
+                <div id="statusDot" class="w-2 h-2 rounded-full transition-colors duration-300 bg-yellow-400"></div>
+                <span id="statusText">Local Cache</span>
+            </div>
+            <button id="clearBtn" class="text-[#007aff] text-[15px] font-semibold bg-transparent border-none p-0 cursor-pointer active:opacity-70"
+                    style="-webkit-tap-highlight-color: transparent;">
+                Clear
+            </button>
+        </div>
+
+        <div id="clearModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div class="bg-white dark:bg-[#1c1c1e] w-[270px] rounded-[14px] flex flex-col overflow-hidden duration-200">
+                <div class="p-5 text-center flex flex-col gap-1 border-b border-gray-200 dark:border-gray-800">
+                    <h3 class="font-semibold text-[17px] m-0">Clear Note?</h3>
+                    <p class="text-[13px] m-0 text-gray-500 dark:text-gray-400">This action cannot be undone.</p>
+                </div>
+                <div class="flex">
+                    <button id="cancelBtn" class="flex-1 p-[11px] text-[17px] text-[#007aff] border-r border-gray-200 dark:border-gray-800 bg-transparent active:bg-gray-100 dark:active:bg-gray-800 transition-colors">
+                        Cancel
+                    </button>
+                    <button id="confirmClearBtn" class="flex-1 p-[11px] text-[17px] font-semibold text-[#ff3b30] bg-transparent active:bg-gray-100 dark:active:bg-gray-800 transition-colors">
+                        Clear
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, doc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        let firebaseConfig;
+        try {
+            firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+                apiKey: "AIzaSyDoeWb3w1vJs6hoexIetSiAqQU1wXhX1tM",
+                authDomain: "trainx-49d0e.firebaseapp.com",
+                projectId: "trainx-49d0e",
+                storageBucket: "trainx-49d0e.firebasestorage.app",
+                messagingSenderId: "905714923468",
+                appId: "1:905714923468:web:5218d3c8b379dae8238f69"
+            };
+        } catch (e) {
+            console.error("Config parse error", e);
+        }
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.appId;
+
+        const editor = document.getElementById('editor');
+        const statusText = document.getElementById('statusText');
+        const statusDot = document.getElementById('statusDot');
+        const bottomBar = document.getElementById('bottomBar');
+        const clearBtn = document.getElementById('clearBtn');
+        const clearModal = document.getElementById('clearModal');
+        const cancelBtn = document.getElementById('cancelBtn');
+        const confirmClearBtn = document.getElementById('confirmClearBtn');
+
+        let currentUser = null;
+        let saveTimeout = null;
+        let isRemoteUpdate = false;
+        const localCacheKey = 'swiftnote_vanilla_cache';
+
+        const setStatus = (text, type) => {
+            statusText.innerText = text;
+            statusDot.className = 'w-2 h-2 rounded-full transition-colors duration-300';
+            if (type === 'saved') statusDot.classList.add('bg-green-500');
+            else if (type === 'saving') statusDot.classList.add('bg-blue-500');
+            else if (type === 'error') statusDot.classList.add('bg-red-500');
+            else statusDot.classList.add('bg-yellow-400');
+        };
+
+        const cached = localStorage.getItem(localCacheKey);
+        if (cached) editor.value = cached;
+
+        setTimeout(() => {
+            editor.focus();
+            editor.setSelectionRange(editor.value.length, editor.value.length);
+        }, 100);
+
+        const initAuth = async () => {
+            try {
+                setStatus('Connecting...', 'saving');
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                setStatus('Offline Mode', 'local');
+            }
+        };
+
+        initAuth();
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            if (user) setupCloudSync(user);
+            else setStatus('Auth Error', 'error');
+        });
+
+        let unsubscribeSnapshot = null;
+        const setupCloudSync = (user) => {
+            const noteDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'notes', 'scratchpad');
+
+            const cachedText = localStorage.getItem(localCacheKey);
+            if (cachedText) {
+                setDoc(noteDocRef, { content: cachedText, updatedAt: Date.now() }, { merge: true })
+                    .then(() => setStatus('Synced', 'saved'))
+                    .catch(() => setStatus('Sync Error', 'error'));
+            } else {
+                setStatus('Synced', 'saved');
+            }
+
+            if (unsubscribeSnapshot) unsubscribeSnapshot();
+            unsubscribeSnapshot = onSnapshot(noteDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const cloudData = docSnap.data();
+                    if (editor.value !== cloudData.content && document.activeElement !== editor) {
+                        isRemoteUpdate = true;
+                        editor.value = cloudData.content || '';
+                        localStorage.setItem(localCacheKey, editor.value);
+                        setTimeout(() => { isRemoteUpdate = false; }, 50);
+                    }
+                }
+            });
+        };
+
+        // --- Feature 1: Double-Dash Timestamp & Debounced Saving ---
+        editor.addEventListener('input', () => {
+            if (isRemoteUpdate) return;
+
+            let val = editor.value;
+            const cursor = editor.selectionStart;
+
+            // Trigger timestamp replacement
+            if (cursor >= 3 && val.substring(cursor - 3, cursor) === '-- ') {
+                const now = new Date();
+                const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ';
+                editor.value = val.substring(0, cursor - 3) + timeString + val.substring(cursor);
+                editor.setSelectionRange(cursor - 3 + timeString.length, cursor - 3 + timeString.length);
+                val = editor.value; // Update val for saving
+            }
+
+            localStorage.setItem(localCacheKey, val);
+
+            if (currentUser) {
+                setStatus('Saving...', 'saving');
+                if (saveTimeout) clearTimeout(saveTimeout);
+                
+                saveTimeout = setTimeout(async () => {
+                    try {
+                        const noteDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'notes', 'scratchpad');
+                        await setDoc(noteDocRef, { content: val, updatedAt: Date.now() }, { merge: true });
+                        setStatus('Saved to Cloud', 'saved');
+                    } catch (error) {
+                        setStatus('Save Failed', 'error');
+                    }
+                }, 1000);
+            }
+        });
+
+        // --- Feature 4 (Part A): Auto-Bullet & Checklist Continuation ---
+        editor.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const cursorPosition = editor.selectionStart;
+                const textBeforeCursor = editor.value.substring(0, cursorPosition);
+                const lines = textBeforeCursor.split('\n');
+                const currentLine = lines[lines.length - 1];
+
+                // Matches "- ", "* ", "1. ", "[ ] ", "[x] "
+                const dashMatch = currentLine.match(/^(\s*)([-*])\s+(.*)$/);
+                const numMatch = currentLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
+                const checkMatch = currentLine.match(/^(\s*)\[([ xX])\]\s+(.*)$/);
+
+                if (dashMatch || numMatch || checkMatch) {
+                    e.preventDefault();
+                    let insertion = '';
+                    
+                    // Detect if the bullet/task is entirely empty
+                    const isEmpty = (dashMatch && dashMatch[3].trim().length === 0) || 
+                                    (numMatch && numMatch[3].trim().length === 0) ||
+                                    (checkMatch && checkMatch[3].trim().length === 0);
+
+                    if (isEmpty) {
+                        const lineStartPos = cursorPosition - currentLine.length;
+                        const textBeforeLine = editor.value.substring(0, lineStartPos);
+                        const textAfterCursor = editor.value.substring(cursorPosition);
+                        
+                        editor.value = textBeforeLine + '\n' + textAfterCursor;
+                        editor.setSelectionRange(lineStartPos + 1, lineStartPos + 1);
+                        editor.dispatchEvent(new Event('input'));
+                        return;
+                    }
+
+                    if (checkMatch) {
+                        insertion = `\n${checkMatch[1]}[ ] `; // Always spawn a blank checkbox
+                    } else if (dashMatch) {
+                        insertion = `\n${dashMatch[1]}${dashMatch[2]} `;
+                    } else if (numMatch) {
+                        const nextNum = parseInt(numMatch[2], 10) + 1;
+                        insertion = `\n${numMatch[1]}${nextNum}. `;
+                    }
+
+                    const textAfterCursor = editor.value.substring(cursorPosition);
+                    editor.value = textBeforeCursor + insertion + textAfterCursor;
+
+                    const newPos = cursorPosition + insertion.length;
+                    editor.setSelectionRange(newPos, newPos);
+                    editor.dispatchEvent(new Event('input'));
+                }
+            }
+        });
+
+        // --- Feature 4 (Part B): Interactive Checklist Toggle ---
+        editor.addEventListener('click', (e) => {
+            const cursor = editor.selectionStart;
+            // Ignore if the user is highlighting text rather than just tapping
+            if (cursor !== editor.selectionEnd) return; 
+
+            const text = editor.value;
+            const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+            let lineEnd = text.indexOf('\n', cursor);
+            if (lineEnd === -1) lineEnd = text.length;
+            
+            const line = text.substring(lineStart, lineEnd);
+            const checkMatch = line.match(/^(\s*)\[([ xX])\]/);
+            
+            if (checkMatch) {
+                // If user clicked within the first few characters near the checkbox
+                const relativeCursor = cursor - lineStart;
+                if (relativeCursor <= checkMatch[0].length + 2) {
+                    const isChecked = checkMatch[2].toLowerCase() === 'x';
+                    const newChar = isChecked ? ' ' : 'x';
+                    const newLine = line.replace(/^(\s*)\[([ xX])\]/, `$1[${newChar}]`);
+                    
+                    editor.value = text.substring(0, lineStart) + newLine + text.substring(lineEnd);
+                    editor.setSelectionRange(cursor, cursor); // Keep cursor position
+                    editor.dispatchEvent(new Event('input')); // Trigger save
+                }
+            }
+        });
+
+        // --- Feature 2: Swipe-to-Copy Action ---
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        bottomBar.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+            touchStartY = e.changedTouches[0].screenY;
+        }, { passive: true });
+
+        bottomBar.addEventListener('touchend', (e) => {
+            const touchEndX = e.changedTouches[0].screenX;
+            const touchEndY = e.changedTouches[0].screenY;
+            
+            const deltaX = touchEndX - touchStartX;
+            const deltaY = Math.abs(touchEndY - touchStartY);
+
+            // If swiped right consistently
+            if (deltaX > 70 && deltaY < 40) {
+                const tempTextArea = document.createElement('textarea');
+                tempTextArea.value = editor.value;
+                document.body.appendChild(tempTextArea);
+                tempTextArea.select();
+                
+                try {
+                    document.execCommand('copy');
+                    
+                    // UI Feedback
+                    const originalText = statusText.innerText;
+                    statusText.classList.add('status-pulse');
+                    setStatus('Copied to Clipboard!', 'saved');
+                    
+                    setTimeout(() => {
+                        statusText.classList.remove('status-pulse');
+                        if (currentUser) setStatus('Saved to Cloud', 'saved');
+                        else setStatus('Local Cache', 'local');
+                    }, 2000);
+                } catch (err) {
+                    console.error('Copy failed');
+                }
+                
+                document.body.removeChild(tempTextArea);
+            }
+        }, { passive: true });
+
+        // --- UI Handlers (Clear Modal) ---
+        clearBtn.addEventListener('click', () => { clearModal.classList.remove('hidden'); });
+
+        cancelBtn.addEventListener('click', () => {
+            clearModal.classList.add('hidden');
+            setTimeout(() => editor.focus(), 100);
+        });
+
+        confirmClearBtn.addEventListener('click', async () => {
+            editor.value = '';
+            localStorage.removeItem(localCacheKey);
+            clearModal.classList.add('hidden');
+            
+            if (currentUser) {
+                try {
+                    const noteDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'notes', 'scratchpad');
+                    await setDoc(noteDocRef, { content: '', updatedAt: Date.now() }, { merge: true });
+                    setStatus('Cleared', 'saved');
+                } catch (e) {
+                    setStatus('Clear Failed', 'error');
+                }
+            } else {
+                setStatus('Local Cache Cleared', 'local');
+            }
+            setTimeout(() => editor.focus(), 100);
+        });
+
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === 'visible') editor.focus();
+        });
+    </script>
+</body>
+</html>
