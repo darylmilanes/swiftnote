@@ -33,7 +33,7 @@
         .editor-style {
             font-size: 18px;
             line-height: 1.6;
-            padding: 1.25rem; /* p-5 equivalent */
+            padding: 1.25rem;
             white-space: pre-wrap;
             word-wrap: break-word;
             font-family: inherit;
@@ -50,7 +50,6 @@
         }
         #editor::-webkit-scrollbar { display: none; }
         
-        /* Subtle animation for status bar text */
         .status-pulse {
             animation: pulse-green 0.3s ease-in-out;
         }
@@ -59,12 +58,19 @@
             50% { color: #34c759; }
             100% { color: inherit; }
         }
+
+        /* CRITICAL iOS UI FIX: Extend the bottom bar through the safe area */
+        #bottomBar {
+            padding-bottom: env(safe-area-inset-bottom);
+            min-height: calc(44px + env(safe-area-inset-bottom));
+        }
     </style>
 </head>
 <body>
 
+    <!-- Removed env(safe-area-inset-bottom) from main container to prevent white space -->
     <div class="flex flex-col w-full bg-white dark:bg-black text-[#1c1c1e] dark:text-[#f2f2f7] font-sans overflow-hidden"
-         style="height: var(--app-height); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);">
+         style="height: var(--app-height); padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);">
         
         <div class="relative flex-1 w-full overflow-hidden flex flex-col">
             <div id="highlighter" class="absolute inset-0 editor-style pointer-events-none z-10 overflow-hidden" aria-hidden="true"></div>
@@ -72,12 +78,12 @@
                       style="-webkit-tap-highlight-color: transparent;" autofocus spellcheck="false"></textarea>
         </div>
 
-        <div id="bottomBar" class="h-[44px] min-h-[44px] bg-[#f8f8f8] dark:bg-[#1c1c1e] border-t border-[#e5e5ea] dark:border-[#38383a] flex justify-between items-center px-5 select-none touch-pan-y">
-            <div class="flex items-center gap-2 text-[13px] font-medium text-gray-500 dark:text-gray-400 pointer-events-none">
+        <div id="bottomBar" class="bg-[#f8f8f8] dark:bg-[#1c1c1e] border-t border-[#e5e5ea] dark:border-[#38383a] flex justify-between items-center px-5 select-none touch-pan-y">
+            <div class="flex items-center gap-2 text-[13px] font-medium text-gray-500 dark:text-gray-400 pointer-events-none mt-[-env(safe-area-inset-bottom)]">
                 <div id="statusDot" class="w-2 h-2 rounded-full transition-colors duration-300 bg-yellow-400"></div>
                 <span id="statusText">Local Cache</span>
             </div>
-            <button id="clearBtn" class="text-[#007aff] text-[15px] font-semibold bg-transparent border-none p-0 cursor-pointer active:opacity-70"
+            <button id="clearBtn" class="text-[#007aff] text-[15px] font-semibold bg-transparent border-none p-0 cursor-pointer active:opacity-70 mt-[-env(safe-area-inset-bottom)]"
                     style="-webkit-tap-highlight-color: transparent;">
                 Clear
             </button>
@@ -102,15 +108,12 @@
     </div>
 
     <script>
-        // Register PWA Service Worker (only on valid protocols to prevent preview environment errors)
         if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('sw.js')
                     .then(reg => console.log('Service Worker registered'))
                     .catch(err => console.warn('Service Worker registration skipped:', err));
             });
-        } else {
-            console.log('Service Worker skipped: Environment does not support it (requires http/https).');
         }
     </script>
 
@@ -162,29 +165,25 @@
             else statusDot.classList.add('bg-yellow-400');
         };
 
-        // --- Highlighting Engine ---
         const renderHighlighter = () => {
             let val = editor.value;
             if (!val) {
                 highlighter.innerHTML = '<span class="text-gray-400 dark:text-gray-600">Start typing...\n• lists\n☐ tasks\n-- time\n1 + 1 = math</span>';
                 return;
             }
-            // Escape HTML safely
             val = val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const lines = val.split('\n');
             const formattedLines = lines.map(line => {
                 if (line.match(/^(\s*)☑/)) {
-                    // Gray out and strikethrough ticked items
                     return `<span class="text-gray-400 dark:text-gray-500 line-through">${line}</span>`;
                 }
                 return `<span class="text-[#1c1c1e] dark:text-[#f2f2f7]">${line}</span>`;
             });
             let html = formattedLines.join('\n');
-            if (val.endsWith('\n')) html += '<br>'; // Allow scrolling past final newline
+            if (val.endsWith('\n')) html += '<br>';
             highlighter.innerHTML = html;
         };
 
-        // Keep scroll positions perfectly synced
         editor.addEventListener('scroll', () => { highlighter.scrollTop = editor.scrollTop; });
 
         const cached = localStorage.getItem(localCacheKey);
@@ -221,7 +220,9 @@
 
         let unsubscribeSnapshot = null;
         const setupCloudSync = (user) => {
-            const noteDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'notes', 'scratchpad');
+            // CRITICAL SYNC FIX: Using the 'public' database path instead of the user's private path.
+            // This allows your Macbook (Logged In) and iPhone PWA (Anonymous) to see the exact same document.
+            const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'cross-device-sync');
 
             const cachedText = localStorage.getItem(localCacheKey);
             if (cachedText) {
@@ -235,7 +236,6 @@
             if (unsubscribeSnapshot) unsubscribeSnapshot();
             unsubscribeSnapshot = onSnapshot(noteDocRef, { includeMetadataChanges: true }, (docSnap) => {
                 if (docSnap.exists()) {
-                    // Ignore snapshots triggered by our own uncommitted local writes
                     if (docSnap.metadata.hasPendingWrites) return;
 
                     const cloudData = docSnap.data();
@@ -247,7 +247,6 @@
                         renderHighlighter();
                         localStorage.setItem(localCacheKey, editor.value);
                         
-                        // Gracefully restore cursor if the user is currently focused on the editor
                         if (document.activeElement === editor) {
                             const newCursor = Math.min(cursorStart, editor.value.length);
                             editor.setSelectionRange(newCursor, newCursor);
@@ -259,7 +258,6 @@
             });
         };
 
-        // --- Feature 1, 2, 3, 4: Magic Input formatting ---
         editor.addEventListener('input', () => {
             if (isRemoteUpdate) return;
 
@@ -269,20 +267,17 @@
             const textAfter = val.substring(cursor);
             let modified = false;
 
-            // 1. Time format (12-hour AM/PM)
             if (textBefore.endsWith('-- ')) {
                 const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) + ' ';
                 textBefore = textBefore.slice(0, -3) + timeStr;
                 modified = true;
             }
 
-            // 2. Dashed bullets to real bullets
             if (textBefore.match(/(^|\n)-\s$/)) {
                 textBefore = textBefore.slice(0, -2) + '• ';
                 modified = true;
             }
 
-            // 3. Real Checkboxes
             if (textBefore.match(/(^|\n)\[\s\]\s$/)) {
                 textBefore = textBefore.slice(0, -4) + '☐ ';
                 modified = true;
@@ -292,28 +287,23 @@
                 modified = true;
             }
 
-            // 4. Advanced Auto-Math Solver (e.g. (10 + 5) * 2 =, 2^3 =, 100 / 4 =, 10 % 3 =)
             const mathMatch = textBefore.match(/([0-9\s\+\-\*\/\(\)\.\^\%]+)=\s*$/);
             if (mathMatch) {
                 let expr = mathMatch[1].trim();
-                // Ensure it has at least one operator and contains only valid math characters to safely evaluate
                 if (/[\+\-\*\/\^\%]/.test(expr) && /^[0-9\s\+\-\*\/\(\)\.\^\%]+$/.test(expr)) {
                     try {
-                        let jsExpr = expr.replace(/\^/g, '**'); // Convert power operator for JS
+                        let jsExpr = expr.replace(/\^/g, '**');
                         let result = new Function('"use strict"; return (' + jsExpr + ')')();
                         
                         if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
-                            result = Math.round(result * 10000) / 10000; // Round to 4 decimals max to avoid floating point bugs
+                            result = Math.round(result * 10000) / 10000;
                             textBefore += result;
                             modified = true;
                         }
-                    } catch (e) {
-                        // Ignore invalid math syntax (e.g., "10 + =")
-                    }
+                    } catch (e) {}
                 }
             }
 
-            // Apply modifications
             if (modified) {
                 editor.value = textBefore + textAfter;
                 editor.setSelectionRange(textBefore.length, textBefore.length);
@@ -327,10 +317,10 @@
                 setStatus('Saving...', 'saving');
                 if (saveTimeout) clearTimeout(saveTimeout);
                 
-                // Reduced from 1000ms to 400ms for snappier real-time syncing
                 saveTimeout = setTimeout(async () => {
                     try {
-                        const noteDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'notes', 'scratchpad');
+                        // Saving to the shared public path so all your devices sync together
+                        const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'cross-device-sync');
                         await setDoc(noteDocRef, { content: val, updatedAt: Date.now() }, { merge: true });
                         setStatus('Saved to Cloud', 'saved');
                     } catch (error) {
@@ -340,7 +330,6 @@
             }
         });
 
-        // --- Feature 4 (Part A): Auto-Bullet & Checklist Continuation ---
         editor.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 const cursorPosition = editor.selectionStart;
@@ -348,7 +337,6 @@
                 const lines = textBeforeCursor.split('\n');
                 const currentLine = lines[lines.length - 1];
 
-                // Check for bullets and real checkboxes
                 const bulletMatch = currentLine.match(/^(\s*)•\s+(.*)$/);
                 const numMatch = currentLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
                 const checkMatch = currentLine.match(/^(\s*)([☐☑])\s+(.*)$/);
@@ -372,11 +360,9 @@
                         return;
                     }
 
-                    if (checkMatch) {
-                        insertion = `\n${checkMatch[1]}☐ `; 
-                    } else if (bulletMatch) {
-                        insertion = `\n${bulletMatch[1]}• `;
-                    } else if (numMatch) {
+                    if (checkMatch) insertion = `\n${checkMatch[1]}☐ `; 
+                    else if (bulletMatch) insertion = `\n${bulletMatch[1]}• `;
+                    else if (numMatch) {
                         const nextNum = parseInt(numMatch[2], 10) + 1;
                         insertion = `\n${numMatch[1]}${nextNum}. `;
                     }
@@ -391,7 +377,6 @@
             }
         });
 
-        // --- Feature 4 (Part B): Interactive Checklist Toggle ---
         editor.addEventListener('click', (e) => {
             const cursor = editor.selectionStart;
             if (cursor !== editor.selectionEnd) return; 
@@ -418,7 +403,6 @@
             }
         });
 
-        // --- Feature 2: Swipe-to-Copy Action ---
         let touchStartX = 0;
         let touchStartY = 0;
 
@@ -434,7 +418,6 @@
             const deltaX = touchEndX - touchStartX;
             const deltaY = Math.abs(touchEndY - touchStartY);
 
-            // If swiped right consistently
             if (deltaX > 70 && deltaY < 40) {
                 const tempTextArea = document.createElement('textarea');
                 tempTextArea.value = editor.value;
@@ -443,8 +426,6 @@
                 
                 try {
                     document.execCommand('copy');
-                    
-                    // UI Feedback
                     const originalText = statusText.innerText;
                     statusText.classList.add('status-pulse');
                     setStatus('Copied to Clipboard!', 'saved');
@@ -454,15 +435,12 @@
                         if (currentUser) setStatus('Saved to Cloud', 'saved');
                         else setStatus('Local Cache', 'local');
                     }, 2000);
-                } catch (err) {
-                    console.error('Copy failed');
-                }
+                } catch (err) {}
                 
                 document.body.removeChild(tempTextArea);
             }
         }, { passive: true });
 
-        // --- UI Handlers (Clear Modal) ---
         clearBtn.addEventListener('click', () => { clearModal.classList.remove('hidden'); });
 
         cancelBtn.addEventListener('click', () => {
@@ -478,7 +456,7 @@
             
             if (currentUser) {
                 try {
-                    const noteDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'notes', 'scratchpad');
+                    const noteDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'notes', 'cross-device-sync');
                     await setDoc(noteDocRef, { content: '', updatedAt: Date.now() }, { merge: true });
                     setStatus('Cleared', 'saved');
                 } catch (e) {
