@@ -1,5 +1,6 @@
 const CACHE_NAME = 'swiftnote-cache-v1';
-const ASSETS = [
+const ASSETS_TO_CACHE = [
+  './',
   './index.html',
   './manifest.json',
   './favicon.png',
@@ -7,58 +8,46 @@ const ASSETS = [
   './icon-512.png'
 ];
 
-// Install Event - Pre-cache essential assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS);
-    })
+    caches.open(CACHE_NAME)
+      .then((cache) => {
+        return cache.addAll(ASSETS_TO_CACHE);
+      })
   );
-  self.skipWaiting();
 });
 
-// Activate Event - Clean up old caches if the version changes
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
-        cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
-            return caches.delete(cache);
+        cacheNames.map((cacheName) => {
+          if (cacheName !== CACHE_NAME) {
+            return caches.delete(cacheName);
           }
         })
       );
     })
   );
-  self.clients.claim();
 });
 
-// Fetch Event - Network First Strategy with Offline Fallback
-// This ensures the zero-latency experience is preserved even if the user drops into a subway/tunnel.
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  
-  // EXCLUDE Firebase and Firestore APIs from being intercepted and cached by the Service Worker
-  // This allows real-time WebSockets and long-polling to function normally
-  if (url.hostname.includes('googleapis.com') || url.hostname.includes('gstatic.com') || url.hostname.includes('firebase')) {
-    return; 
-  }
+  // Use a Stale-While-Revalidate pattern for HTML/JS assets to keep the app up to date 
+  // while still loading instantly offline.
+  if (event.request.method !== 'GET') return;
 
   event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        // Only update cache for successful GET requests
-        if (event.request.method === 'GET' && response.status === 200) {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseClone);
-            });
-        }
-        return response;
-      })
-      .catch(() => {
-        // Fallback to cache if network is unavailable
-        return caches.match(event.request);
-      })
+    caches.match(event.request).then((cachedResponse) => {
+      const fetchPromise = fetch(event.request).then((networkResponse) => {
+        caches.open(CACHE_NAME).then((cache) => {
+          cache.put(event.request, networkResponse.clone());
+        });
+        return networkResponse;
+      }).catch(() => {
+        // Fallback for offline if not in cache
+      });
+
+      return cachedResponse || fetchPromise;
+    })
   );
 });
