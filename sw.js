@@ -36,6 +36,14 @@ self.addEventListener('activate', (event) => {
 // Fetch Event - Network First Strategy with Offline Fallback
 // This ensures the zero-latency experience is preserved even if the user drops into a subway/tunnel.
 self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  
+  // EXCLUDE Firebase and Firestore APIs from being intercepted and cached by the Service Worker
+  // This allows real-time WebSockets and long-polling to function normally
+  if (url.hostname.includes('googleapis.com') || url.hostname.includes('gstatic.com') || url.hostname.includes('firebase')) {
+    return; 
+  }
+
   event.respondWith(
     fetch(event.request)
       .then((response) => {
