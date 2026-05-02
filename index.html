@@ -25,11 +25,24 @@
         @media (prefers-color-scheme: dark) {
             body { background-color: #000000; }
         }
-        #editor {
+        
+        .editor-style {
             font-size: 18px;
             line-height: 1.6;
+            padding: 1.25rem; /* p-5 equivalent */
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: inherit;
+        }
+
+        #editor {
+            color: transparent;
+            caret-color: #1c1c1e;
             -ms-overflow-style: none;
             scrollbar-width: none;
+        }
+        @media (prefers-color-scheme: dark) {
+            #editor { caret-color: #f2f2f7; }
         }
         #editor::-webkit-scrollbar { display: none; }
         
@@ -49,9 +62,11 @@
     <div class="flex flex-col w-full bg-white dark:bg-black text-[#1c1c1e] dark:text-[#f2f2f7] font-sans overflow-hidden"
          style="height: var(--app-height); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);">
         
-        <textarea id="editor" placeholder="Start typing...&#10;- lists&#10;[ ] tasks&#10;-- time" 
-                  class="flex-1 w-full bg-transparent border-none outline-none resize-none p-5 placeholder-gray-400 dark:placeholder-gray-600 font-normal"
-                  style="-webkit-tap-highlight-color: transparent;" autofocus></textarea>
+        <div class="relative flex-1 w-full overflow-hidden flex flex-col">
+            <div id="highlighter" class="absolute inset-0 editor-style pointer-events-none z-10 overflow-hidden" aria-hidden="true"></div>
+            <textarea id="editor" class="absolute inset-0 w-full h-full bg-transparent border-none outline-none resize-none editor-style z-20"
+                      style="-webkit-tap-highlight-color: transparent;" autofocus spellcheck="false"></textarea>
+        </div>
 
         <div id="bottomBar" class="h-[44px] min-h-[44px] bg-[#f8f8f8] dark:bg-[#1c1c1e] border-t border-[#e5e5ea] dark:border-[#38383a] flex justify-between items-center px-5 select-none touch-pan-y">
             <div class="flex items-center gap-2 text-[13px] font-medium text-gray-500 dark:text-gray-400 pointer-events-none">
@@ -107,6 +122,7 @@
         const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.appId;
 
         const editor = document.getElementById('editor');
+        const highlighter = document.getElementById('highlighter');
         const statusText = document.getElementById('statusText');
         const statusDot = document.getElementById('statusDot');
         const bottomBar = document.getElementById('bottomBar');
@@ -129,8 +145,36 @@
             else statusDot.classList.add('bg-yellow-400');
         };
 
+        // --- Highlighting Engine ---
+        const renderHighlighter = () => {
+            let val = editor.value;
+            if (!val) {
+                highlighter.innerHTML = '<span class="text-gray-400 dark:text-gray-600">Start typing...\n• lists\n☐ tasks\n-- time\n1 + 1 = math</span>';
+                return;
+            }
+            // Escape HTML safely
+            val = val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const lines = val.split('\n');
+            const formattedLines = lines.map(line => {
+                if (line.match(/^(\s*)☑/)) {
+                    // Gray out and strikethrough ticked items
+                    return `<span class="text-gray-400 dark:text-gray-500 line-through">${line}</span>`;
+                }
+                return `<span class="text-[#1c1c1e] dark:text-[#f2f2f7]">${line}</span>`;
+            });
+            let html = formattedLines.join('\n');
+            if (val.endsWith('\n')) html += '<br>'; // Allow scrolling past final newline
+            highlighter.innerHTML = html;
+        };
+
+        // Keep scroll positions perfectly synced
+        editor.addEventListener('scroll', () => { highlighter.scrollTop = editor.scrollTop; });
+
         const cached = localStorage.getItem(localCacheKey);
-        if (cached) editor.value = cached;
+        if (cached) {
+            editor.value = cached;
+            renderHighlighter();
+        }
 
         setTimeout(() => {
             editor.focus();
@@ -178,6 +222,7 @@
                     if (editor.value !== cloudData.content && document.activeElement !== editor) {
                         isRemoteUpdate = true;
                         editor.value = cloudData.content || '';
+                        renderHighlighter();
                         localStorage.setItem(localCacheKey, editor.value);
                         setTimeout(() => { isRemoteUpdate = false; }, 50);
                     }
@@ -185,22 +230,64 @@
             });
         };
 
-        // --- Feature 1: Double-Dash Timestamp & Debounced Saving ---
+        // --- Feature 1, 2, 3, 4: Magic Input formatting ---
         editor.addEventListener('input', () => {
             if (isRemoteUpdate) return;
 
             let val = editor.value;
             const cursor = editor.selectionStart;
+            let textBefore = val.substring(0, cursor);
+            const textAfter = val.substring(cursor);
+            let modified = false;
 
-            // Trigger timestamp replacement
-            if (cursor >= 3 && val.substring(cursor - 3, cursor) === '-- ') {
-                const now = new Date();
-                const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ';
-                editor.value = val.substring(0, cursor - 3) + timeString + val.substring(cursor);
-                editor.setSelectionRange(cursor - 3 + timeString.length, cursor - 3 + timeString.length);
-                val = editor.value; // Update val for saving
+            // 1. Time format (12-hour AM/PM)
+            if (textBefore.endsWith('-- ')) {
+                const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) + ' ';
+                textBefore = textBefore.slice(0, -3) + timeStr;
+                modified = true;
             }
 
+            // 2. Dashed bullets to real bullets
+            if (textBefore.match(/(^|\n)-\s$/)) {
+                textBefore = textBefore.slice(0, -2) + '• ';
+                modified = true;
+            }
+
+            // 3. Real Checkboxes
+            if (textBefore.match(/(^|\n)\[\s\]\s$/)) {
+                textBefore = textBefore.slice(0, -4) + '☐ ';
+                modified = true;
+            }
+            if (textBefore.match(/(^|\n)\[[xX]\]\s$/)) {
+                textBefore = textBefore.slice(0, -4) + '☑ ';
+                modified = true;
+            }
+
+            // 4. Auto-Math Solver (e.g. 100 + 50 =)
+            const mathMatch = textBefore.match(/(\d+(?:\.\d+)?)\s*([+\-*/])\s*(\d+(?:\.\d+)?)\s*=\s*$/);
+            if (mathMatch) {
+                const num1 = parseFloat(mathMatch[1]);
+                const op = mathMatch[2];
+                const num2 = parseFloat(mathMatch[3]);
+                let result = 0;
+                if (op === '+') result = num1 + num2;
+                else if (op === '-') result = num1 - num2;
+                else if (op === '*') result = num1 * num2;
+                else if (op === '/') result = num1 / num2;
+                
+                result = Math.round(result * 100) / 100; // Round to 2 decimals
+                textBefore += result;
+                modified = true;
+            }
+
+            // Apply modifications
+            if (modified) {
+                editor.value = textBefore + textAfter;
+                editor.setSelectionRange(textBefore.length, textBefore.length);
+                val = editor.value;
+            }
+
+            renderHighlighter();
             localStorage.setItem(localCacheKey, val);
 
             if (currentUser) {
@@ -227,17 +314,16 @@
                 const lines = textBeforeCursor.split('\n');
                 const currentLine = lines[lines.length - 1];
 
-                // Matches "- ", "* ", "1. ", "[ ] ", "[x] "
-                const dashMatch = currentLine.match(/^(\s*)([-*])\s+(.*)$/);
+                // Check for bullets and real checkboxes
+                const bulletMatch = currentLine.match(/^(\s*)•\s+(.*)$/);
                 const numMatch = currentLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
-                const checkMatch = currentLine.match(/^(\s*)\[([ xX])\]\s+(.*)$/);
+                const checkMatch = currentLine.match(/^(\s*)([☐☑])\s+(.*)$/);
 
-                if (dashMatch || numMatch || checkMatch) {
+                if (bulletMatch || numMatch || checkMatch) {
                     e.preventDefault();
                     let insertion = '';
                     
-                    // Detect if the bullet/task is entirely empty
-                    const isEmpty = (dashMatch && dashMatch[3].trim().length === 0) || 
+                    const isEmpty = (bulletMatch && bulletMatch[2].trim().length === 0) || 
                                     (numMatch && numMatch[3].trim().length === 0) ||
                                     (checkMatch && checkMatch[3].trim().length === 0);
 
@@ -253,9 +339,9 @@
                     }
 
                     if (checkMatch) {
-                        insertion = `\n${checkMatch[1]}[ ] `; // Always spawn a blank checkbox
-                    } else if (dashMatch) {
-                        insertion = `\n${dashMatch[1]}${dashMatch[2]} `;
+                        insertion = `\n${checkMatch[1]}☐ `; 
+                    } else if (bulletMatch) {
+                        insertion = `\n${bulletMatch[1]}• `;
                     } else if (numMatch) {
                         const nextNum = parseInt(numMatch[2], 10) + 1;
                         insertion = `\n${numMatch[1]}${nextNum}. `;
@@ -274,7 +360,6 @@
         // --- Feature 4 (Part B): Interactive Checklist Toggle ---
         editor.addEventListener('click', (e) => {
             const cursor = editor.selectionStart;
-            // Ignore if the user is highlighting text rather than just tapping
             if (cursor !== editor.selectionEnd) return; 
 
             const text = editor.value;
@@ -283,19 +368,18 @@
             if (lineEnd === -1) lineEnd = text.length;
             
             const line = text.substring(lineStart, lineEnd);
-            const checkMatch = line.match(/^(\s*)\[([ xX])\]/);
+            const checkMatch = line.match(/^(\s*)([☐☑])/);
             
             if (checkMatch) {
-                // If user clicked within the first few characters near the checkbox
                 const relativeCursor = cursor - lineStart;
-                if (relativeCursor <= checkMatch[0].length + 2) {
-                    const isChecked = checkMatch[2].toLowerCase() === 'x';
-                    const newChar = isChecked ? ' ' : 'x';
-                    const newLine = line.replace(/^(\s*)\[([ xX])\]/, `$1[${newChar}]`);
+                if (relativeCursor <= checkMatch[0].length + 1) {
+                    const isChecked = checkMatch[2] === '☑';
+                    const newChar = isChecked ? '☐' : '☑';
+                    const newLine = line.replace(/^(\s*)[☐☑]/, `$1${newChar}`);
                     
                     editor.value = text.substring(0, lineStart) + newLine + text.substring(lineEnd);
-                    editor.setSelectionRange(cursor, cursor); // Keep cursor position
-                    editor.dispatchEvent(new Event('input')); // Trigger save
+                    editor.setSelectionRange(cursor, cursor); 
+                    editor.dispatchEvent(new Event('input')); 
                 }
             }
         });
@@ -354,6 +438,7 @@
 
         confirmClearBtn.addEventListener('click', async () => {
             editor.value = '';
+            renderHighlighter();
             localStorage.removeItem(localCacheKey);
             clearModal.classList.add('hidden');
             
